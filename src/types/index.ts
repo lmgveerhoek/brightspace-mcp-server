@@ -28,8 +28,11 @@ export interface SessionFile {
 }
 
 // Application configuration
+export type AuthProvider = "purdue" | "tudelft";
+
 export interface AppConfig {
   baseUrl: string;
+  authProvider: AuthProvider;
   sessionDir: string;
   tokenTtl: number; // seconds
   headless: boolean;

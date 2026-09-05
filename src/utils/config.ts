@@ -6,7 +6,7 @@
 
 import * as path from "node:path";
 import * as os from "node:os";
-import type { AppConfig } from "../types/index.js";
+import type { AppConfig, AuthProvider } from "../types/index.js";
 import { configStoreExists, loadConfigStore } from "./config-store.js";
 
 export function loadConfig(): AppConfig {
@@ -52,8 +52,16 @@ export function loadConfig(): AppConfig {
     activeOnly = process.env.D2L_ACTIVE_ONLY !== 'false';
   }
 
+  const authProvider = process.env.D2L_AUTH_PROVIDER || store?.authProvider || "purdue";
+  if (!isAuthProvider(authProvider)) {
+    throw new Error(
+      `Invalid D2L_AUTH_PROVIDER: ${authProvider}. Expected "purdue" or "tudelft".`,
+    );
+  }
+
   return {
     baseUrl: process.env.D2L_BASE_URL || store?.baseUrl || "https://purdue.brightspace.com",
+    authProvider,
     sessionDir,
     tokenTtl,
     headless,
@@ -65,6 +73,10 @@ export function loadConfig(): AppConfig {
       activeOnly,
     },
   };
+}
+
+function isAuthProvider(value: string): value is AuthProvider {
+  return value === "purdue" || value === "tudelft";
 }
 
 function expandTilde(filePath: string): string {

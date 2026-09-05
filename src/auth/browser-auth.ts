@@ -12,15 +12,16 @@ import * as os from "node:os";
 import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
-import { PurdueSSOFlow } from "./purdue-sso.js";
+import { createSSOFlow } from "./sso-flow.js";
+import type { SSOFlow } from "./sso-flow.js";
 
 export class BrowserAuth {
   private config: AppConfig;
-  private ssoFlow: PurdueSSOFlow;
+  private ssoFlow: SSOFlow;
 
   constructor(config: AppConfig) {
     this.config = config;
-    this.ssoFlow = new PurdueSSOFlow({
+    this.ssoFlow = createSSOFlow(config.authProvider, {
       username: config.username,
       password: config.password,
     });
@@ -183,10 +184,14 @@ export class BrowserAuth {
       // lock files persist and prevent all future auth attempts.
       await this.validateAndClearLockFiles(browserDataDir);
 
-      // Force headed mode when no credentials — user must interact with the browser
-      const headless = this.ssoFlow.hasCredentials() ? this.config.headless : false;
-      if (!this.ssoFlow.hasCredentials() && this.config.headless) {
-        log("INFO", "Overriding headless mode — browser must be visible for manual login");
+      // Force headed mode when no credentials, OR when the SSO flow needs the
+      // user to interact with the browser (e.g. a TOTP code). Otherwise the
+      // user could never complete MFA.
+      const canRunHeadless =
+        this.ssoFlow.hasCredentials() && !this.ssoFlow.requiresBrowserInteraction();
+      const headless = canRunHeadless ? this.config.headless : false;
+      if (!headless && this.config.headless) {
+        log("INFO", "Overriding headless mode — browser must be visible for manual login / MFA");
       }
 
       const launchOptions = {
@@ -225,7 +230,10 @@ export class BrowserAuth {
 
       // CRITICAL: Set up token interception BEFORE navigation
       // Use longer timeout for manual login (5 min) vs automated SSO (2 min)
-      const interceptTimeout = this.ssoFlow.hasCredentials() ? 120000 : 300000;
+      const interceptTimeout =
+        this.ssoFlow.hasCredentials() && !this.ssoFlow.requiresBrowserInteraction()
+          ? 120000
+          : 300000;
       const tokenPromise = this.setupTokenInterception(page, interceptTimeout);
 
       // Navigate and login if needed
@@ -482,16 +490,51 @@ export class BrowserAuth {
       let currentUrl = page.url();
       log("DEBUG", `Current URL after navigation: ${currentUrl}`);
 
+      // When unauthenticated, Brightspace returns a 200 OK with an empty body and an inline
+      // <script>window.location.replace('/d2l/login?sessionExpired=...')</script>.
+      // domcontentloaded resolves before that script executes. Detect this redirect shell:
+      if (currentUrl.includes("/d2l/home") && typeof page.evaluate === "function") {
+        const isRedirectShell = await page
+          .evaluate(() => {
+            const isEmptyBody = !document.body || document.body.children.length === 0;
+            const hasRedirectScript = Array.from(document.querySelectorAll("script")).some(
+              (s) =>
+                s.textContent &&
+                s.textContent.includes("location.replace") &&
+                s.textContent.includes("/d2l/login"),
+            );
+            return isEmptyBody && hasRedirectScript;
+          })
+          .catch(() => false);
+
+        if (isRedirectShell) {
+          log("DEBUG", "Detected Brightspace client-side redirect shell, waiting for redirect to login...");
+          try {
+            await page.waitForURL(
+              (url) => !url.pathname.endsWith("/d2l/home"),
+              { timeout: 5000 },
+            );
+            currentUrl = page.url();
+          } catch {
+            // Proceed with currentUrl
+          }
+        }
+      }
+
+      const isKnownAuthUrl = (url: string) =>
+        /\/d2l\/login|login\.tudelft\.nl|sso\.purdue\.edu|surfconext|engine\.surfconext|login\.microsoftonline\.com|shibboleth|\/saml2?\/redirect|\/idp\//i.test(url);
+
       // Some institutions (e.g. USC) bounce through an extra SAML hop such as
       // /d2l/lp/auth/login/samlLogin.d2l before landing on /d2l/home, even when the
-      // restored cookies are still valid. `domcontentloaded` can resolve mid-chain,
-      // so re-check once the redirects settle. Without this we misread a live session
-      // as logged-out and start an SSO flow that waits for a login form that never
-      // renders — which throws before the caller can persist session.json.
-      if (!currentUrl.includes("/d2l/home")) {
+      // restored cookies are still valid.
+      // If we're not on /d2l/home and not already on a known auth URL, settle redirects.
+      if (!currentUrl.includes("/d2l/home") && !isKnownAuthUrl(currentUrl)) {
         try {
-          await page.waitForURL(/\/d2l\/home/, { timeout: 15000 });
-          log("DEBUG", "Redirect chain settled on /d2l/home");
+          await page.waitForURL(
+            (url) => url.pathname.includes("/d2l/home") || isKnownAuthUrl(url.href),
+            { timeout: 5000 },
+          );
+          log("DEBUG", "Redirect chain settled");
         } catch {
           // Never landed on /d2l/home — a real login is required.
         }
@@ -557,7 +600,7 @@ export class BrowserAuth {
       const currentUrl = page.url();
       if (!currentUrl.includes("/d2l/home")) {
         await page.goto(`${this.config.baseUrl}/d2l/home`, {
-          waitUntil: "networkidle",
+          waitUntil: "domcontentloaded",
           timeout: 15000,
         });
       }
@@ -602,7 +645,7 @@ export class BrowserAuth {
       const currentUrl = page.url();
       if (!currentUrl.includes("/d2l/home")) {
         await page.goto(`${this.config.baseUrl}/d2l/home`, {
-          waitUntil: "networkidle",
+          waitUntil: "domcontentloaded",
           timeout: 15000,
         });
       }
@@ -708,6 +751,13 @@ export class BrowserAuth {
         "storage-state.json"
       );
 
+      // If auto-reauth was triggered because the session expired, skip loading stale storage state.
+      // Restoring expired cookies only creates false-positive "already authenticated" states.
+      if (process.env.D2L_REAUTH === "true") {
+        log("INFO", "Auto-reauth triggered — skipping stale storage state");
+        return;
+      }
+
       // Check if storage state file exists
       let stats: Awaited<ReturnType<typeof fs.stat>>;
       try {
@@ -753,38 +803,30 @@ export class BrowserAuth {
         );
       }
 
-      // Restore localStorage for each origin
+      // Restore localStorage for each origin via addInitScript (instant, no extra tabs/nav)
       if (state.origins && state.origins.length > 0) {
         for (const origin of state.origins) {
           if (origin.localStorage && origin.localStorage.length > 0) {
-            let tempPage: Page | null = null;
-            try {
-              // Create a temporary page to set localStorage
-              tempPage = await context.newPage();
-              await tempPage.goto(origin.origin, { timeout: 10000 });
-
-              // Set each localStorage item
-              await tempPage.evaluate((items) => {
-                for (const item of items) {
-                  localStorage.setItem(item.name, item.value);
+            const originUrl = origin.origin;
+            const items = origin.localStorage;
+            await context.addInitScript(
+              ({ targetOrigin, entries }) => {
+                if (window.location.origin === targetOrigin) {
+                  for (const { name, value } of entries) {
+                    try {
+                      localStorage.setItem(name, value);
+                    } catch {
+                      // ignore quota or security errors
+                    }
+                  }
                 }
-              }, origin.localStorage);
-
-              log(
-                "INFO",
-                `Restored ${origin.localStorage.length} localStorage items for ${origin.origin}`
-              );
-            } catch (originError) {
-              log("WARN", `Failed to restore localStorage for ${origin.origin}`, originError);
-            } finally {
-              if (tempPage) {
-                try {
-                  await tempPage.close();
-                } catch {
-                  // Page may already be closed
-                }
-              }
-            }
+              },
+              { targetOrigin: originUrl, entries: items },
+            );
+            log(
+              "DEBUG",
+              `Registered init script to restore ${items.length} localStorage items for ${originUrl}`
+            );
           }
         }
       }

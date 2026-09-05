@@ -13,7 +13,7 @@ import { log } from "../utils/logger.js";
  * Timeout for the auth process. Generous because the user may need to
  * approve MFA on their phone or manually log in via the browser.
  */
-const AUTH_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+const AUTH_TIMEOUT_MS = 6 * 60 * 1000; // Allow the 5-minute interactive login window to finish.
 
 /**
  * Launches the brightspace-auth CLI as a child process to
@@ -57,7 +57,7 @@ export class AuthRunner {
           {
             timeout: AUTH_TIMEOUT_MS,
             cwd: this.projectRoot,
-            env: { ...process.env },
+            env: { ...process.env, D2L_REAUTH: "true" },
           },
           (error, _stdout, _stderr) => {
             if (error) {

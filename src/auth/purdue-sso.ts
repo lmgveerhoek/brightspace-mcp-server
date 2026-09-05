@@ -7,6 +7,7 @@
 import type { Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
+import type { SSOFlow } from "./sso-flow.js";
 
 const SELECTORS = {
   usernameInput: "input#username",
@@ -20,7 +21,7 @@ interface PurdueSSOConfig {
   password?: string;
 }
 
-export class PurdueSSOFlow {
+export class PurdueSSOFlow implements SSOFlow {
   private config: PurdueSSOConfig;
 
   constructor(config: PurdueSSOConfig) {
@@ -32,6 +33,14 @@ export class PurdueSSOFlow {
    */
   hasCredentials(): boolean {
     return Boolean(this.config.username && this.config.password);
+  }
+
+  /**
+   * Purdue MFA is a Duo push approved on the phone, so the browser does not
+   * need to remain visible when credentials are configured.
+   */
+  requiresBrowserInteraction(): boolean {
+    return false;
   }
 
   /**
@@ -101,7 +110,7 @@ export class PurdueSSOFlow {
       log("INFO", "Campus selector detected — navigating directly to Shibboleth IdP");
       await page.goto(
         `${baseUrl}/d2l/lp/auth/saml/initiate-login?entityId=https://idp.purdue.edu/idp/shibboleth`,
-        { waitUntil: "networkidle", timeout: 30000 }
+        { waitUntil: "domcontentloaded", timeout: 30000 }
       );
     }
     // Already on sso.purdue.edu or past the campus selector — nothing to do

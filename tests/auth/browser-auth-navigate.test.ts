@@ -18,6 +18,7 @@ const BASE_URL = "https://brightspace.example.edu";
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     baseUrl: BASE_URL,
+    authProvider: "purdue",
     sessionDir: "/tmp/does-not-matter",
     tokenTtl: 3600,
     headless: true,
@@ -102,5 +103,32 @@ describe("BrowserAuth.navigateAndLogin", () => {
     await expect(navigate(page)).resolves.toBe(true);
     expect(page.waitForURL).not.toHaveBeenCalled();
     expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
+  it("immediately starts SSO login without waiting when landing directly on a known auth URL", async () => {
+    const page = makeRedirectingPage([`${BASE_URL}/d2l/login?sessionExpired=0`]);
+
+    await expect(navigate(page)).resolves.toBe(false);
+    expect(page.waitForURL).not.toHaveBeenCalled();
+    expect(ssoFlow.login).toHaveBeenCalledOnce();
+  });
+
+  it("detects Brightspace client-side redirect shell on /d2l/home and advances to login", async () => {
+    let current = `${BASE_URL}/d2l/home`;
+    const page = {
+      goto: vi.fn(async () => null),
+      url: vi.fn(() => current),
+      evaluate: vi.fn(async () => true), // mock isRedirectShell = true
+      waitForURL: vi.fn(async (predicate: (url: URL) => boolean) => {
+        current = `${BASE_URL}/d2l/login?sessionExpired=0`;
+        if (predicate(new URL(current))) return;
+        throw new Error("Timeout");
+      }),
+      waitForLoadState: vi.fn(async () => {}),
+    };
+
+    await expect(navigate(page)).resolves.toBe(false);
+    expect(page.evaluate).toHaveBeenCalledOnce();
+    expect(ssoFlow.login).toHaveBeenCalledOnce();
   });
 });

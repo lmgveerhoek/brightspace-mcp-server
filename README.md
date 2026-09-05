@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, announcem
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Works with any school that uses D2L Brightspace, including Purdue, USC, and hundreds more.
+Works with any school that uses D2L Brightspace, including Purdue, TU Delft, USC, and hundreds more.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -43,6 +43,15 @@ Purdue students can add `--purdue` to skip entering the school URL:
 npx brightspace-mcp-server setup --purdue
 ```
 
+TU Delft students can add `--tudelft`:
+
+```bash
+npx brightspace-mcp-server setup --tudelft
+```
+
+Environment-based configurations can select the same flow with
+`D2L_AUTH_PROVIDER=tudelft`.
+
 The wizard walks you through login, MFA, and auto configures Claude Desktop and Cursor. Restart your AI client when it finishes.
 
 <details>
@@ -62,7 +71,7 @@ You still need to run `npx brightspace-mcp-server setup` first to save your cred
 
 ## Session Expired?
 
-Sessions re-authenticate automatically. If auto-reauth fails (e.g., you missed the Duo push):
+Sessions re-authenticate automatically. If auto-reauth fails (e.g., you missed the MFA push or code):
 
 ```bash
 npx brightspace-mcp-server auth
@@ -98,7 +107,7 @@ npm install
 npm run dev
 ```
 
-**Add your school:** Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If your school's login flow is different, add a handler in `src/auth/`.
+**Add your school:** Add a preset with an explicit auth provider to `SCHOOL_PRESETS` in `src/setup.ts`. If your school's login flow is different, add a handler in `src/auth/` and register it in `createSSOFlow`.
 
 **Add a new tool:** Create a file in `src/tools/`, add the schema in `schemas.ts`, export it in `src/tools/index.ts`, and register it in `src/index.ts`. Use any existing tool as a template.
 

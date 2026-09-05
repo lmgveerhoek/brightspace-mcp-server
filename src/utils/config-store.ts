@@ -7,10 +7,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import type { AuthProvider } from "../types/index.js";
 
 /** JSON schema for ~/.brightspace-mcp/config.json */
 export interface ConfigStoreData {
   baseUrl?: string;
+  authProvider?: AuthProvider;
   username?: string;
   password?: string;
   sessionDir?: string;

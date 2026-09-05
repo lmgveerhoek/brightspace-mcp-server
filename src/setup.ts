@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { saveConfigStore, getConfigStorePath } from "./utils/config-store.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
+import type { AuthProvider } from "./types/index.js";
 
 // ANSI helpers
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -29,6 +30,7 @@ const thisDir = path.dirname(fileURLToPath(import.meta.url));
 interface SchoolPreset {
   name: string;
   baseUrl: string;
+  authProvider: AuthProvider;
   usernameLabel: string;
   mfaNote: string;
 }
@@ -37,8 +39,16 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
   purdue: {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",
+    authProvider: "purdue",
     usernameLabel: "Purdue career account username",
     mfaNote: "Approve the Duo push on your phone.",
+  },
+  tudelft: {
+    name: "TU Delft",
+    baseUrl: "https://brightspace.tudelft.nl",
+    authProvider: "tudelft",
+    usernameLabel: "TU Delft NetID username",
+    mfaNote: "Enter the 6-digit code from the 'login.tudelft.nl' profile in your Microsoft Authenticator app, then approve the consent screen if prompted.",
   },
 };
 
@@ -363,6 +373,7 @@ async function main(): Promise<void> {
   // ── Step 5: Save config ──────────────────────────────────────────
   const config: ConfigStoreData = {
     baseUrl,
+    authProvider: preset?.authProvider ?? "purdue",
     username,
     password,
   };
