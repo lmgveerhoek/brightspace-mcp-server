@@ -166,91 +166,31 @@ export async function checkTopicAvailability(
   endDate?: string | null;
   message: string;
 } | null> {
+  let topic: {
+    Id: number;
+    Title: string;
+    StartDate?: string | null;
+    EndDate?: string | null;
+    IsLocked?: boolean;
+    IsHidden?: boolean;
+  } | null = null;
+
+  // 1. Try direct topic endpoint
   try {
     const topicPath = apiClient.le(courseId, `/content/topics/${topicId}`);
-    const topic = await apiClient.get<TopicDetails>(topicPath);
-
-    if (topic) {
-      const title = topic.Title || `Topic ${topicId}`;
-      const startDate = topic.StartDate ?? null;
-      const endDate = topic.EndDate ?? null;
-      const now = new Date();
-      const notStarted = startDate ? new Date(startDate) > now : false;
-      const ended = endDate ? new Date(endDate) < now : false;
-
-      if (notStarted && startDate) {
-        return {
-          success: false,
-          available: false,
-          courseId,
-          topicId,
-          title,
-          reason: "not_yet_open",
-          startDate,
-          endDate,
-          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (beschikbaar vanaf ${startDate}).`,
-        };
-      }
-
-      if (topic.IsLocked) {
-        return {
-          success: false,
-          available: false,
-          courseId,
-          topicId,
-          title,
-          reason: "locked",
-          startDate,
-          endDate,
-          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is momenteel vergrendeld door de docent.`,
-        };
-      }
-
-      if (topic.IsHidden) {
-        return {
-          success: false,
-          available: false,
-          courseId,
-          topicId,
-          title,
-          reason: "hidden",
-          startDate,
-          endDate,
-          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is verborgen door de docent.`,
-        };
-      }
-
-      if (ended && endDate) {
-        return {
-          success: false,
-          available: false,
-          courseId,
-          topicId,
-          title,
-          reason: "ended",
-          startDate,
-          endDate,
-          message: `Het bestand "${title}" was aanwezig op Brightspace, maar de beschikbaarheidsperiode is verstreken (gesloten sinds ${endDate}).`,
-        };
-      }
-
-      // If download failed with 403 even though explicit flags aren't set (e.g. release conditions or group restriction)
-      if (httpStatus === 403) {
-        return {
-          success: false,
-          available: false,
-          courseId,
-          topicId,
-          title,
-          reason: "restricted",
-          startDate,
-          endDate,
-          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (toegangsvoorwaarde of restrictie actief).`,
-        };
-      }
+    const details = await apiClient.get<TopicDetails>(topicPath);
+    if (details) {
+      topic = {
+        Id: details.Id,
+        Title: details.Title,
+        StartDate: details.StartDate,
+        EndDate: details.EndDate,
+        IsLocked: details.IsLocked,
+        IsHidden: details.IsHidden,
+      };
     }
   } catch (error) {
-    log("DEBUG", `Could not fetch topic metadata for topic ${topicId}`, error);
+    log("DEBUG", `Direct topic metadata lookup failed for topic ${topicId}`, error);
     if (error instanceof ApiError && error.status === 403) {
       return {
         success: false,
@@ -261,6 +201,114 @@ export async function checkTopicAvailability(
         message: `Het bestand (topic ID: ${topicId}) is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (toegang tot dit onderdeel is afgeschermd).`,
       };
     }
+  }
+
+  // 2. Fallback to Table of Contents (TOC) if direct endpoint fails / returns 404 (common for unreleased topics)
+  if (!topic) {
+    try {
+      const tocPath = apiClient.le(courseId, "/content/toc");
+      const toc = await apiClient.get<{ Modules?: any[] }>(tocPath, { ttl: 60000 });
+      function findInModules(modules?: any[]): any {
+        for (const m of modules || []) {
+          for (const t of m.Topics || []) {
+            if (t.TopicId === topicId || t.Identifier === String(topicId)) {
+              return {
+                Id: t.TopicId ?? topicId,
+                Title: t.Title,
+                StartDate: t.StartDateTime ?? t.StartDate ?? null,
+                EndDate: t.EndDateTime ?? t.EndDate ?? null,
+                IsLocked: t.IsLocked ?? false,
+                IsHidden: t.IsHidden ?? false,
+              };
+            }
+          }
+          const nested = findInModules(m.Modules);
+          if (nested) return nested;
+        }
+        return null;
+      }
+      topic = findInModules(toc?.Modules);
+    } catch (tocError) {
+      log("DEBUG", `TOC lookup failed for course ${courseId}`, tocError);
+    }
+  }
+
+  if (topic) {
+    const title = topic.Title || `Topic ${topicId}`;
+    const startDate = topic.StartDate ?? null;
+    const endDate = topic.EndDate ?? null;
+    const now = new Date();
+    const notStarted = startDate ? new Date(startDate) > now : false;
+    const ended = endDate ? new Date(endDate) < now : false;
+
+    if (notStarted && startDate) {
+      return {
+        success: false,
+        available: false,
+        courseId,
+        topicId,
+        title,
+        reason: "not_yet_open",
+        startDate,
+        endDate,
+        message: `Het bestand "${title}" is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (beschikbaar vanaf ${startDate}).`,
+      };
+    }
+
+    if (topic.IsLocked) {
+      return {
+        success: false,
+        available: false,
+        courseId,
+        topicId,
+        title,
+        reason: "locked",
+        startDate,
+        endDate,
+        message: `Het bestand "${title}" is aanwezig op Brightspace, maar is momenteel vergrendeld door de docent.`,
+      };
+    }
+
+    if (topic.IsHidden) {
+      return {
+        success: false,
+        available: false,
+        courseId,
+        topicId,
+        title,
+        reason: "hidden",
+        startDate,
+        endDate,
+        message: `Het bestand "${title}" is aanwezig op Brightspace, maar is verborgen door de docent.`,
+      };
+    }
+
+    if (ended && endDate) {
+      return {
+        success: false,
+        available: false,
+        courseId,
+        topicId,
+        title,
+        reason: "ended",
+        startDate,
+        endDate,
+        message: `Het bestand "${title}" was aanwezig op Brightspace, maar de beschikbaarheidsperiode is verstreken (gesloten sinds ${endDate}).`,
+      };
+    }
+
+    // If download failed with 403 or 404 even though explicit flags aren't set (e.g. release conditions or group restriction)
+    return {
+      success: false,
+      available: false,
+      courseId,
+      topicId,
+      title,
+      reason: "restricted",
+      startDate,
+      endDate,
+      message: `Het bestand "${title}" is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (toegangsvoorwaarde of restrictie actief).`,
+    };
   }
 
   if (httpStatus === 403) {
