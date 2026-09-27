@@ -76,11 +76,11 @@ export class TudelftSSOFlow implements SSOFlow {
   }
 
   /**
-   * TU Delft uses a rotating TOTP code, so the user always has to interact with
-   * the browser. This forces headed mode even when credentials are configured.
+   * TU Delft Brightspace does not require MFA/2FA, so when NetID credentials
+   * are provided, the login flow can run headlessly without browser interaction.
    */
   requiresBrowserInteraction(): boolean {
-    return true;
+    return false;
   }
 
   /**
@@ -214,7 +214,7 @@ export class TudelftSSOFlow implements SSOFlow {
       await page.waitForSelector("#submit_button", { timeout: 10000 });
       await page.click("#submit_button");
       this.credentialsSubmitted = true;
-      log("INFO", "NetID credentials submitted - complete MFA in the browser (see your Microsoft Authenticator app).");
+      log("INFO", "NetID credentials submitted - logging into Brightspace...");
     } catch (error) {
       log("WARN", "Automated credential entry failed, falling back to manual login", error);
       // Leave the form open so the user can type their credentials.

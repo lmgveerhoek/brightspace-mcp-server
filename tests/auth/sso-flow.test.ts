@@ -11,8 +11,8 @@ describe("createSSOFlow", () => {
     });
     expect(flow).toBeInstanceOf(TudelftSSOFlow);
     expect(flow.hasCredentials()).toBe(true);
-    // TU Delft always needs the browser for the TOTP code.
-    expect(flow.requiresBrowserInteraction()).toBe(true);
+    // TU Delft Brightspace does not require MFA for student login.
+    expect(flow.requiresBrowserInteraction()).toBe(false);
   });
 
   it("returns the Purdue flow when selected", () => {

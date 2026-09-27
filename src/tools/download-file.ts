@@ -5,7 +5,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient } from "../api/index.js";
+import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
@@ -131,6 +131,152 @@ export function parseContentDispositionFilename(
   return null;
 }
 
+interface TopicDetails {
+  Id: number;
+  Title: string;
+  ShortTitle: string | null;
+  Type: number;
+  TopicType: number;
+  Url?: string;
+  StartDate?: string | null;
+  EndDate?: string | null;
+  DueDate?: string | null;
+  IsHidden?: boolean;
+  IsLocked?: boolean;
+  Description?: { Text: string; Html: string } | null;
+}
+
+/**
+ * Inspect topic metadata to provide a helpful, user-friendly message when
+ * a content file is not available (e.g. locked, hidden, or not yet open).
+ */
+export async function checkTopicAvailability(
+  apiClient: D2LApiClient,
+  courseId: number,
+  topicId: number,
+  httpStatus: number
+): Promise<{
+  success: boolean;
+  available: boolean;
+  courseId: number;
+  topicId: number;
+  title?: string;
+  reason: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  message: string;
+} | null> {
+  try {
+    const topicPath = apiClient.le(courseId, `/content/topics/${topicId}`);
+    const topic = await apiClient.get<TopicDetails>(topicPath);
+
+    if (topic) {
+      const title = topic.Title || `Topic ${topicId}`;
+      const startDate = topic.StartDate ?? null;
+      const endDate = topic.EndDate ?? null;
+      const now = new Date();
+      const notStarted = startDate ? new Date(startDate) > now : false;
+      const ended = endDate ? new Date(endDate) < now : false;
+
+      if (notStarted && startDate) {
+        return {
+          success: false,
+          available: false,
+          courseId,
+          topicId,
+          title,
+          reason: "not_yet_open",
+          startDate,
+          endDate,
+          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (beschikbaar vanaf ${startDate}).`,
+        };
+      }
+
+      if (topic.IsLocked) {
+        return {
+          success: false,
+          available: false,
+          courseId,
+          topicId,
+          title,
+          reason: "locked",
+          startDate,
+          endDate,
+          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is momenteel vergrendeld door de docent.`,
+        };
+      }
+
+      if (topic.IsHidden) {
+        return {
+          success: false,
+          available: false,
+          courseId,
+          topicId,
+          title,
+          reason: "hidden",
+          startDate,
+          endDate,
+          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is verborgen door de docent.`,
+        };
+      }
+
+      if (ended && endDate) {
+        return {
+          success: false,
+          available: false,
+          courseId,
+          topicId,
+          title,
+          reason: "ended",
+          startDate,
+          endDate,
+          message: `Het bestand "${title}" was aanwezig op Brightspace, maar de beschikbaarheidsperiode is verstreken (gesloten sinds ${endDate}).`,
+        };
+      }
+
+      // If download failed with 403 even though explicit flags aren't set (e.g. release conditions or group restriction)
+      if (httpStatus === 403) {
+        return {
+          success: false,
+          available: false,
+          courseId,
+          topicId,
+          title,
+          reason: "restricted",
+          startDate,
+          endDate,
+          message: `Het bestand "${title}" is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (toegangsvoorwaarde of restrictie actief).`,
+        };
+      }
+    }
+  } catch (error) {
+    log("DEBUG", `Could not fetch topic metadata for topic ${topicId}`, error);
+    if (error instanceof ApiError && error.status === 403) {
+      return {
+        success: false,
+        available: false,
+        courseId,
+        topicId,
+        reason: "restricted",
+        message: `Het bestand (topic ID: ${topicId}) is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (toegang tot dit onderdeel is afgeschermd).`,
+      };
+    }
+  }
+
+  if (httpStatus === 403) {
+    return {
+      success: false,
+      available: false,
+      courseId,
+      topicId,
+      reason: "restricted",
+      message: `Het bestand (topic ID: ${topicId}) is aanwezig op Brightspace, maar is nog niet beschikbaar gesteld door de docent (toegang geweigerd).`,
+    };
+  }
+
+  return null;
+}
+
 /**
  * Download a content file using topicId
  */
@@ -150,7 +296,23 @@ async function downloadContentFile(
   const apiPath = apiClient.le(courseId, `/content/topics/${topicId}/file`);
 
   // Fetch file using getRaw (returns Response object, not parsed JSON)
-  const response = await apiClient.getRaw(apiPath);
+  let response: Response;
+  try {
+    response = await apiClient.getRaw(apiPath);
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+      const availabilityInfo = await checkTopicAvailability(
+        apiClient,
+        courseId,
+        topicId,
+        error.status
+      );
+      if (availabilityInfo) {
+        return toolResponse(availabilityInfo);
+      }
+    }
+    throw error;
+  }
 
   // Check Content-Length BEFORE downloading body (prevent memory exhaustion)
   const contentLength = parseInt(
@@ -240,8 +402,22 @@ async function downloadSubmissionFile(
     }>;
   }
 
-  const submissions =
-    await apiClient.get<DropboxSubmission[]>(submissionsPath);
+  let submissions: DropboxSubmission[];
+  try {
+    submissions = await apiClient.get<DropboxSubmission[]>(submissionsPath);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 403) {
+      return toolResponse({
+        success: false,
+        available: false,
+        courseId,
+        folderId,
+        reason: "restricted",
+        message: `De inleveropdracht (folder ID: ${folderId}) is aanwezig op Brightspace, maar is momenteel niet toegankelijk of nog niet geopend door de docent.`,
+      });
+    }
+    throw error;
+  }
 
   if (!submissions || submissions.length === 0) {
     return errorResponse(
@@ -274,7 +450,23 @@ async function downloadSubmissionFile(
   );
 
   // Fetch file
-  const response = await apiClient.getRaw(downloadApiPath);
+  let response: Response;
+  try {
+    response = await apiClient.getRaw(downloadApiPath);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 403) {
+      return toolResponse({
+        success: false,
+        available: false,
+        courseId,
+        folderId,
+        fileId,
+        reason: "restricted",
+        message: `Het inleverbestand "${file.FileName}" is aanwezig op Brightspace, maar is momenteel niet toegankelijk of nog niet vrijgegeven door de docent.`,
+      });
+    }
+    throw error;
+  }
 
   // Download body as buffer
   const buffer = Buffer.from(await response.arrayBuffer());

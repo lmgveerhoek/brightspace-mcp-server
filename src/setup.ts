@@ -48,7 +48,7 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     baseUrl: "https://brightspace.tudelft.nl",
     authProvider: "tudelft",
     usernameLabel: "TU Delft NetID username",
-    mfaNote: "Enter the 6-digit code from the 'login.tudelft.nl' profile in your Microsoft Authenticator app, then approve the consent screen if prompted.",
+    mfaNote: "No MFA required for Brightspace. Login runs automatically in the background.",
   },
 };
 

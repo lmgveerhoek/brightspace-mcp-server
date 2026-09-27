@@ -49,10 +49,9 @@ TU Delft students can add `--tudelft`:
 npx brightspace-mcp-server setup --tudelft
 ```
 
-Environment-based configurations can select the same flow with
-`D2L_AUTH_PROVIDER=tudelft`.
+Environment-based configurations can select the same flow with `D2L_AUTH_PROVIDER=tudelft`. For TU Delft, authentication and auto re-auth run completely in the background (headless) since Brightspace does not require MFA.
 
-The wizard walks you through login, MFA, and auto configures Claude Desktop and Cursor. Restart your AI client when it finishes.
+The wizard walks you through setup and auto configures Claude Desktop and Cursor. Restart your AI client when it finishes.
 
 <details>
 <summary>Using a different client? Configure it manually.</summary>
@@ -84,7 +83,7 @@ npx brightspace-mcp-server auth
 | Grades | "Am I passing all my classes?" · "Compare my grades across all courses" |
 | Assignments | "What's due in the next 48 hours?" · "Summarize every assignment I haven't turned in yet" |
 | Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" |
-| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" |
+| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Which lecture slides are not yet released?" |
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" |

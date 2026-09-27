@@ -10,12 +10,17 @@ import type { AppConfig, AuthProvider } from "../types/index.js";
 import { configStoreExists, loadConfigStore } from "./config-store.js";
 
 export function loadConfig(): AppConfig {
-  const store = configStoreExists() ? loadConfigStore() : null;
+  let store: ReturnType<typeof loadConfigStore> | null = null;
+  try {
+    store = configStoreExists() ? loadConfigStore() : null;
+  } catch {
+    store = null;
+  }
 
   if (store) {
     console.error("[config] Loaded base config from ~/.brightspace-mcp/config.json");
   } else {
-    console.error("[config] No config.json found, using environment variables");
+    console.error("[config] No config.json found or unreadable, using environment variables");
   }
 
   // Resolve sessionDir: env > store > default
@@ -25,8 +30,14 @@ export function loadConfig(): AppConfig {
       ? expandTilde(store.sessionDir)
       : path.join(os.homedir(), ".d2l-session");
 
-  // Resolve headless: env > store > default (false)
-  let headless = store?.headless ?? false;
+  const username = process.env.D2L_USERNAME || store?.username;
+  const password = process.env.D2L_PASSWORD || store?.password;
+
+  // Resolve headless: env > store > default (true when credentials exist, false for manual login)
+  let headless = Boolean(username && password);
+  if (store?.headless !== undefined) {
+    headless = store.headless;
+  }
   if (process.env.D2L_HEADLESS !== undefined) {
     headless = process.env.D2L_HEADLESS === "true";
   }
@@ -65,8 +76,8 @@ export function loadConfig(): AppConfig {
     sessionDir,
     tokenTtl,
     headless,
-    username: process.env.D2L_USERNAME || store?.username,
-    password: process.env.D2L_PASSWORD || store?.password,
+    username,
+    password,
     courseFilter: {
       includeCourseIds,
       excludeCourseIds,

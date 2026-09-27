@@ -103,6 +103,30 @@ async function buildContentTree(
         );
       }
 
+      // Calculate module availability
+      const moduleStartDate = item.ModuleStartDate ?? item.StartDate ?? null;
+      const moduleEndDate = item.ModuleEndDate ?? item.EndDate ?? null;
+      const now = new Date();
+      const moduleNotStarted = moduleStartDate ? new Date(moduleStartDate) > now : false;
+      const moduleEnded = moduleEndDate ? new Date(moduleEndDate) < now : false;
+      const isModuleAvailable = !item.IsHidden && !item.IsLocked && !moduleNotStarted && !moduleEnded;
+
+      let moduleAvailabilityStatus = "available";
+      let moduleAvailabilityMessage: string | null = null;
+      if (item.IsHidden) {
+        moduleAvailabilityStatus = "hidden";
+        moduleAvailabilityMessage = "Verborgen door docent";
+      } else if (item.IsLocked) {
+        moduleAvailabilityStatus = "locked";
+        moduleAvailabilityMessage = "Vergrendeld door docent";
+      } else if (moduleNotStarted) {
+        moduleAvailabilityStatus = "not_yet_open";
+        moduleAvailabilityMessage = `Nog niet beschikbaar (beschikbaar vanaf ${moduleStartDate})`;
+      } else if (moduleEnded) {
+        moduleAvailabilityStatus = "ended";
+        moduleAvailabilityMessage = `Niet meer beschikbaar (gesloten sinds ${moduleEndDate})`;
+      }
+
       // Only include module if it has matching children (or filter is 'all')
       if (typeFilter === 'all' || processedChildren.length > 0) {
         tree.push({
@@ -113,6 +137,11 @@ async function buildContentTree(
           dueDate: item.ModuleDueDate ?? null,
           isHidden: item.IsHidden,
           isLocked: item.IsLocked,
+          isAvailable: isModuleAvailable,
+          availabilityStatus: moduleAvailabilityStatus,
+          availabilityMessage: moduleAvailabilityMessage,
+          startDate: moduleStartDate,
+          endDate: moduleEndDate,
           children: processedChildren,
         });
       }
@@ -127,6 +156,29 @@ async function buildContentTree(
 
       const topicProgress = progressMap.get(item.Id);
 
+      const startDate = item.StartDate ?? null;
+      const endDate = item.EndDate ?? null;
+      const now = new Date();
+      const notStarted = startDate ? new Date(startDate) > now : false;
+      const ended = endDate ? new Date(endDate) < now : false;
+      const isAvailable = !item.IsHidden && !item.IsLocked && !notStarted && !ended;
+
+      let availabilityStatus = "available";
+      let availabilityMessage: string | null = null;
+      if (item.IsHidden) {
+        availabilityStatus = "hidden";
+        availabilityMessage = "Verborgen door docent";
+      } else if (item.IsLocked) {
+        availabilityStatus = "locked";
+        availabilityMessage = "Vergrendeld door docent";
+      } else if (notStarted) {
+        availabilityStatus = "not_yet_open";
+        availabilityMessage = `Nog niet beschikbaar gesteld door de docent (beschikbaar vanaf ${startDate})`;
+      } else if (ended) {
+        availabilityStatus = "ended";
+        availabilityMessage = `Niet meer beschikbaar (gesloten sinds ${endDate})`;
+      }
+
       const topic: any = {
         type: 'topic',
         topicType,
@@ -134,6 +186,11 @@ async function buildContentTree(
         title: item.Title,
         isHidden: item.IsHidden,
         isLocked: item.IsLocked,
+        isAvailable,
+        availabilityStatus,
+        availabilityMessage,
+        startDate,
+        endDate,
         dueDate: item.DueDate ?? null,
         isCompleted: topicProgress?.IsRead ?? false,
         completedDate: topicProgress?.DateCompleted ?? null,
